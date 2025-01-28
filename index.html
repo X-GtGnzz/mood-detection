@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Neon AI Mood Analyzer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        :root {
+            --neon-blue: #00f3ff;
+            --neon-pink: #ff00ff;
+            --dark-bg: #0a0a0f;
+            --cyber-border: 1px solid var(--neon-blue);
+        }
+
+        body {
+            background: var(--dark-bg);
+            color: var(--neon-blue);
+            font-family: 'Courier New', monospace;
+            margin: 0;
+            padding: 10px;
+            overflow-x: hidden;
+        }
+
+        #video-container {
+            position: relative;
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+            border: var(--cyber-border);
+            box-shadow: 0 0 15px var(--neon-blue);
+            aspect-ratio: 9/16;
+        }
+
+        #analytics-panel {
+            width: 95%;
+            margin: 15px auto;
+            padding: 15px;
+            border: var(--cyber-border);
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(5px);
+        }
+
+        .cyber-text {
+            font-size: 1.2em;
+            text-shadow: 0 0 10px var(--neon-blue);
+            margin: 8px 0;
+            padding: 5px;
+            border-bottom: 1px dashed var(--neon-pink);
+        }
+
+        #video, #canvas {
+            transform: scaleX(-1);
+            width: 100%!important;
+            height: 100%!important;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .mood-history {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .mood-bubble {
+            padding: 6px 12px;
+            border-radius: 15px;
+            background: var(--dark-bg);
+            border: 1px solid var(--neon-pink);
+            animation: glow 1.5s infinite alternate;
+            font-size: 0.9em;
+            flex: 1 1 45%;
+            text-align: center;
+        }
+
+        @keyframes glow {
+            from { box-shadow: 0 0 5px var(--neon-pink); }
+            to { box-shadow: 0 0 15px var(--neon-pink); }
+        }
+
+        .header {
+            text-align: center;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            font-size: 0.9em;
+            color: var(--neon-pink);
+        }
+
+        #debug-panel {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border: var(--cyber-border);
+            font-size: 0.8em;
+        }
+    </style>
+</head>
+<body>
+    <div class="status-bar">
+        <span>🕶️ AI ANALYZER</span>
+        <span id="connection-status">📶 ONLINE</span>
+    </div>
+    
+    <div class="header">
+        <h2 style="color: var(--neon-pink); margin:5px;">NEON AI</h2>
+        <small>Real-time Emotion Analysis</small>
+    </div>
+
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    
+    <div id="analytics-panel">
+        <div class="cyber-text" id="mood-display">🎭 MOOD: INITIALIZING...</div>
+        <div class="cyber-text" id="age-display">👤 AGE: --</div>
+        <div class="cyber-text" id="gender-display">⚧ GENDER: --</div>
+        
+        <div class="cyber-text" style="color:var(--neon-pink); margin-top:15px;">📅 MOOD HISTORY</div>
+        <div class="mood-history" id="mood-history"></div>
+    </div>
+
+    <div id="debug-panel">
+        <div>System Status: <span id="sys-status">Loading...</span></div>
+        <div>Camera: <span id="cam-status">Offline</span></div>
+        <div>Models: <span id="model-status">0/4 Loaded</span></div>
+        <button onclick="location.reload()">🔄 Restart System</button>
+    </div>
+
+    <!-- Load TensorFlow.js dulu -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.18.0/dist/tf.min.js"></script>
+    <!-- Kemudian face-api.js -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <!-- Script adapter -->
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const modelPath = '/models';
+        let isDetecting = false;
+
+        // Debugging Elements
+        const debugElements = {
+            system: document.getElementById('sys-status'),
+            camera: document.getElementById('cam-status'),
+            models: document.getElementById('model-status')
+        };
+
+        async function initializeSystem() {
+            try {
+                // Step 1: Load ML Models
+                debugElements.system.textContent = 'Loading Models...';
+                await loadModels();
+                
+                // Step 2: Initialize Camera
+                debugElements.system.textContent = 'Starting Camera...';
+                await startVideo();
+                
+                // Step 3: Start Detection
+                debugElements.system.textContent = 'Starting Detection...';
+                initializeCanvas();
+                detectFaces();
+                
+                debugElements.system.textContent = 'System Ready';
+            } catch (error) {
+                debugElements.system.textContent = `ERROR: ${error.message}`;
+                console.error('System Initialization Failed:', error);
+            }
+        }
+
+        async function loadModels() {
+            try {
+                const startTime = Date.now();
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(modelPath),
+                    faceapi.nets.faceLandmark68TinyNet.loadFromUri(modelPath),
+                    faceapi.nets.faceExpressionNet.loadFromUri(modelPath),
+                    faceapi.nets.ageGenderNet.loadFromUri(modelPath)
+                ]);
+                debugElements.models.textContent = '4/4 Loaded';
+                console.log(`Models loaded in ${Date.now() - startTime}ms`);
+            } catch (error) {
+                debugElements.models.textContent = 'Failed to Load';
+                throw new Error(`Model Loading Failed: ${error.message}`);
+            }
+        }
+
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    } 
+                });
+                
+                video.srcObject = stream;
+                debugElements.camera.textContent = 'Active';
+                
+                return new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        console.log('Video resolution:', video.videoWidth, 'x', video.videoHeight);
+                        resolve();
+                    };
+                });
+            } catch (error) {
+                debugElements.camera.textContent = 'Access Denied';
+                throw new Error(`Camera Error: ${error.message}`);
+            }
+        }
+
+        function initializeCanvas() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            faceapi.matchDimensions(canvas, video);
+        }
+
+        async function detectFaces() {
+            if (isDetecting) return;
+            isDetecting = true;
+            
+            try {
+                const detection = await faceapi.detectSingleFace(
+                    video,
+                    new faceapi.TinyFaceDetectorOptions({
+                        inputSize: 512,
+                        scoreThreshold: 0.5
+                    })
+                )
+                .withFaceLandmarks(true)
+                .withFaceExpressions()
+                .withAgeAndGender();
+
+                // Clear previous drawings
+                canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+                if (detection) {
+                    const resizedResults = faceapi.resizeResults(detection, video);
+                    faceapi.draw.drawDetections(canvas, [resizedResults]);
+                    faceapi.draw.drawFaceLandmarks(canvas, [resizedResults], { drawLines: true });
+
+                    updateUI(detection);
+                }
+            } catch (error) {
+                console.error('Detection Error:', error);
+            }
+            
+            isDetecting = false;
+            requestAnimationFrame(detectFaces);
+        }
+
+        function updateUI(detection) {
+            // Update Mood
+            const expressions = detection.expressions;
+            const dominantExpression = expressions.asSortedArray()[0].expression;
+            document.getElementById('mood-display').textContent = `🎭 MOOD: ${dominantExpression.toUpperCase()}`;
+
+            // Update Age/Gender
+            document.getElementById('age-display').textContent = `👤 AGE: ${Math.round(detection.age)}`;
+            document.getElementById('gender-display').textContent = `⚧ GENDER: ${detection.gender}`;
+
+            // Update History
+            const moodHistory = document.getElementById('mood-history');
+            if (moodHistory.children.length >= 8) moodHistory.firstChild.remove();
+            moodHistory.innerHTML += `<div class="mood-bubble">${dominantExpression}</div>`;
+        }
+
+        // Handle Window Resize
+        function handleResize() {
+            canvas.width = video.offsetWidth;
+            canvas.height = video.offsetHeight;
+            faceapi.matchDimensions(canvas, video);
+        }
+
+        // Initialize when ready
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeSystem();
+            window.addEventListener('resize', handleResize);
+            window.addEventListener('orientationchange', handleResize);
+        });
+
+        // Add manual camera start button
+        document.body.insertAdjacentHTML('beforeend', `
+            <button style="position:fixed;top:10px;right:10px;z-index:1000;" 
+                    onclick="initializeSystem()">
+                🔴 MANUAL START
+            </button>
+        `);
+    </script>
+</body>
+</html>
